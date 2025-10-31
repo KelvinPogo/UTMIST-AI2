@@ -8,7 +8,7 @@ pygame.init()
 my_agent = UserInputAgent()
 
 #Input your file path here in SubmittedAgent if you are loading a model:
-opponent = SubmittedAgent(file_path=None)
+opponent = RecurrentPPOAgent(file_path="checkpoints/experiment_9/rl_model_324000_steps.zip", total_timesteps=60000)
 
 match_time = 99999
 
@@ -17,5 +17,5 @@ run_real_time_match(
     agent_1=my_agent,
     agent_2=opponent,
     max_timesteps=30 * 999990000,  # Match time in frames (adjust as needed)
-    resolution=CameraResolution.LOW,
+    resolution=CameraResolution.LOW
 )

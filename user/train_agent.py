@@ -49,7 +49,7 @@ class SB3Agent(Agent):
 
     def _initialize(self) -> None:
         if self.file_path is None:
-            self.model = self.sb3_class("MlpPolicy", self.env, verbose=0, n_steps=30*90*3, batch_size=128, ent_coef=0.01)
+            self.model = self.sb3_class("MlpPolicy", self.env, verbose=0, n_steps=60000, batch_size=128, ent_coef=0.01)
             del self.env
         else:
             self.model = self.sb3_class.load(self.file_path)
@@ -83,9 +83,11 @@ class RecurrentPPOAgent(Agent):
     '''
     def __init__(
             self,
+            total_timesteps: int = 60000,
             file_path: Optional[str] = None
     ):
         super().__init__(file_path)
+        self.total_timesteps = total_timesteps
         self.lstm_states = None
         self.episode_starts = np.ones((1,), dtype=bool)
 
@@ -103,7 +105,7 @@ class RecurrentPPOAgent(Agent):
             self.model = RecurrentPPO("MlpLstmPolicy",
                                       self.env,
                                       verbose=0,
-                                      n_steps=30*90*20,
+                                      n_steps=self.total_timesteps,
                                       batch_size=16,
                                       ent_coef=0.05,
                                       policy_kwargs=policy_kwargs)
@@ -543,13 +545,13 @@ Add your dictionary of RewardFunctions here using RewTerms
 '''
 def gen_reward_manager():
     reward_functions = {
-        #'target_height_reward': RewTerm(func=base_height_l2, weight=0.0, params={'target_height': -4, 'obj_name': 'player'}),
+        'target_height_reward': RewTerm(func=base_height_l2, weight=0.0, params={'target_height': -4, 'obj_name': 'player'}),
         'danger_zone_reward': RewTerm(func=danger_zone_reward, weight=0.5),
         'damage_interaction_reward': RewTerm(func=damage_interaction_reward, weight=1.0),
-        #'head_to_middle_reward': RewTerm(func=head_to_middle_reward, weight=0.01),
-        #'head_to_opponent': RewTerm(func=head_to_opponent, weight=0.05),
+        'head_to_middle_reward': RewTerm(func=head_to_middle_reward, weight=0.1),
+        'head_to_opponent': RewTerm(func=head_to_opponent, weight=0.3),
         'penalize_attack_reward': RewTerm(func=in_state_reward, weight=-0.04, params={'desired_state': AttackState}),
-        'holding_more_than_3_keys': RewTerm(func=holding_more_than_3_keys, weight=-0.01),
+        'holding_more_than_3_keys': RewTerm(func=holding_more_than_3_keys, weight=-0.01)
         #'taunt_reward': RewTerm(func=in_state_reward, weight=0.2, params={'desired_state': TauntState}),
     }
     signal_subscriptions = {
@@ -569,13 +571,17 @@ The main function runs training. You can change configurations such as the Agent
 '''
 if __name__ == '__main__':
     # Create agent
-    my_agent = CustomAgent(sb3_class=PPO, extractor=MLPExtractor)
+    from user.my_agent import KevinAgent
+    # my_agent = Rec
 
     # Start here if you want to train from scratch. e.g:
-    #my_agent = RecurrentPPOAgent()
+    # my_agent = RecurrentPPOAgent()
 
     # Start here if you want to train from a specific timestep. e.g:
-    #my_agent = RecurrentPPOAgent(file_path='checkpoints/experiment_3/rl_model_120006_steps.zip')
+    my_agent = RecurrentPPOAgent(
+    total_timesteps=60000,
+    file_path='checkpoints/experiment_9/rl_model_270000_steps.zip'
+)
 
     # Reward manager
     reward_manager = gen_reward_manager()
@@ -592,7 +598,7 @@ if __name__ == '__main__':
         max_saved=40, # Maximum number of saved models
         save_path='checkpoints', # Save path
         run_name='experiment_9',
-        mode=SaveHandlerMode.FORCE # Save mode, FORCE or RESUME
+        mode=SaveHandlerMode.RESUME # Save mode, FORCE or RESUME
     )
 
     # Set opponent settings here:
@@ -608,6 +614,6 @@ if __name__ == '__main__':
         save_handler,
         opponent_cfg,
         CameraResolution.LOW,
-        train_timesteps=1_000_000_000,
+        train_timesteps=1_000_000_000_000,
         train_logging=TrainLogging.PLOT
     )

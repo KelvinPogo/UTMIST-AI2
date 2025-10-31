@@ -75,3 +75,58 @@ class SubmittedAgent(Agent):
     def learn(self, env, total_timesteps, log_interval: int = 4):
         self.model.set_env(env)
         self.model.learn(total_timesteps=total_timesteps, log_interval=log_interval)
+
+# ======================================================
+# My first custom agent
+# ======================================================
+
+from stable_baselines3 import PPO
+
+class KevinAgent(Agent): 
+
+    def __init__(self, file_path: Optional[str] = None):
+        super().__init__(file_path)
+        self.file_path = file_path
+
+    def _initialize(self):
+        if self.file_path is not None:
+            # Load pretrained model
+            print(f"Loading pretrained model from {self.file_path}")
+            self.model = PPO.load(self.file_path)
+        else:
+            # Create a new PPO model from scratch (this is just a sample)
+            print("Creating new PPO agent...")
+            policy_kwargs = dict(net_arch=[256, 256])
+            self.model = PPO(
+                "MlpPolicy",
+                self.env,
+                verbose=1,
+                learning_rate=3e-4,
+                n_steps=2048,
+                batch_size=64,
+                ent_coef=0.01,
+                policy_kwargs=policy_kwargs
+            )
+    
+    def predict(self, obs):
+        """Predict action given observation (used during matches)."""
+        action, _ = self.model.predict(obs)
+        return action
+
+    def learn(self, env, total_timesteps: int, log_interval: int = 4):
+        """Train the PPO model and save periodic checkpoints."""
+        self.model.set_env(env)
+        for i in range(10):
+            print(f"Training chunk {i+1}/10...")
+            self.model.learn(
+                total_timesteps=total_timesteps // 10,
+                reset_num_timesteps=False,
+                log_interval=log_interval
+            )
+            self.model.save(f"checkpoints/kevin_agent_{(i+1)*total_timesteps//10}.zip")
+        print("Training complete!")
+
+    def save(self, file_path: str):
+        """Save the final trained model."""
+        print(f"Saving model to {file_path}")
+        self.model.save(file_path)
