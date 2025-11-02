@@ -17,9 +17,9 @@
 import os
 import gdown
 import torch
-import gymnasium as gym
 import torch.nn as nn
 import torch.nn.functional as F
+import gymnasium as gym
 from typing import Optional
 from environment.agent import Agent
 from stable_baselines3 import PPO
@@ -79,9 +79,13 @@ class SubmittedAgent(Agent):
             )
             del self.env
         else:
-            # CRITICAL: Load with the same custom architecture
-            policy_kwargs = MLPExtractor.get_policy_kwargs()
-            self.model = PPO.load(self.file_path, policy_kwargs=policy_kwargs)
+            # FIXED: Use custom_objects instead of policy_kwargs
+            self.model = PPO.load(
+                self.file_path, 
+                custom_objects={
+                    'policy_kwargs': MLPExtractor.get_policy_kwargs()
+                }
+            )
 
     def _gdown(self) -> str:
         data_path = "rl-model.zip"
