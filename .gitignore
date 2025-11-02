@@ -14,12 +14,19 @@ assets.zip
 .env
 
 /checkpoints/*
-
+setup.py
 # Videos, zip files, or csv
 *.mp4
 *.zip
 *.csv# macOS
 .DS_Store
+
+# Your package metadata (exclude editable install metadata)
+utmist_ai2.egg-info/
+*.egg-info/
+
+# Installed package metadata and wheels
+.eggs/
 
 # Python
 __pycache__/

@@ -84,9 +84,10 @@ class RecurrentPPOAgent(Agent):
     def __init__(
             self,
             total_timesteps: int = 60000,
-            file_path: Optional[str] = None
+            file_path: Optional[str] = None,
+            learning_rate: float = 0.1
     ):
-        super().__init__(file_path)
+        super().__init__(file_path, learning_rate)
         self.total_timesteps = total_timesteps
         self.lstm_states = None
         self.episode_starts = np.ones((1,), dtype=bool)
@@ -311,7 +312,21 @@ class CustomAgent(Agent):
     
     def _initialize(self) -> None:
         if self.file_path is None:
-            self.model = self.sb3_class("MlpPolicy", self.env, policy_kwargs=self.extractor.get_policy_kwargs(), verbose=0, n_steps=30*90*3, batch_size=128, ent_coef=0.01)
+            # Improved parameters for fighting game
+            self.model = self.sb3_class(
+                "MlpPolicy",
+                self.env,
+                policy_kwargs=self.extractor.get_policy_kwargs(),
+                verbose=1,  # Set to 1 to see training logs
+                n_steps=1024,          # Reduced for more frequent updates
+                batch_size=256,        # Increased for more stable updates
+                ent_coef=0.01,         # Slightly more exploration
+                learning_rate=1e-4,    # Reduced learning rate
+                n_epochs=10,
+                clip_range=0.2,
+                gae_lambda=0.95,
+                gamma=0.99             # Explicitly set discount factor
+            )
             del self.env
         else:
             self.model = self.sb3_class.load(self.file_path)
@@ -410,6 +425,27 @@ def damage_interaction_reward(
 
 # In[ ]:
 
+def height_bounds_reward(
+    env: WarehouseBrawl,
+    min_height: float = 0.5,  # minimum allowed height
+    max_height: float = 4.2  # maximum allowed height (same as danger_zone)
+) -> float:
+    """Penalize asset height if outside acceptable bounds.
+    
+    Args:
+        env: Game environment
+        min_height: Minimum acceptable height (below this gets penalty)
+        max_height: Maximum acceptable height (above this gets penalty) 
+    """
+    obj: GameObject = env.objects["player"]
+    height = obj.body.position.y
+    
+    # Penalize if too low or too high
+    if height < min_height:
+        return -(min_height - height)**2  # Quadratic penalty for being too low
+    elif height > max_height:
+        return -(height - max_height)**2  # Quadratic penalty for being too high
+    return 0.0  # No penalty if within bounds
 
 def danger_zone_reward(
     env: WarehouseBrawl,
@@ -484,16 +520,17 @@ def head_to_middle_reward(
 def head_to_opponent(
     env: WarehouseBrawl,
 ) -> float:
-
-    # Get player object from the environment
+    
     player: Player = env.objects["player"]
     opponent: Player = env.objects["opponent"]
-
-    # Apply penalty if the player is in the danger zone
-    multiplier = -1 if player.body.position.x > opponent.body.position.x else 1
-    reward = multiplier * (player.body.position.x - player.prev_x)
-
-    return reward
+    
+    dx = opponent.body.position.x - player.body.position.x
+    distance = abs(dx)
+    
+    # Reward decreasing distance to opponent
+    if distance < 3.0:  # Only reward when reasonably close
+        return (3.0 - distance) * env.dt  # Bounded reward
+    return 0.0
 
 def holding_more_than_3_keys(
     env: WarehouseBrawl,
@@ -540,26 +577,91 @@ def on_combo_reward(env: WarehouseBrawl, agent: str) -> float:
     else:
         return 1.0
 
+def distance_based_attack_penalty(
+    env: WarehouseBrawl,
+    optimal_distance: float = 1.0,
+    tolerance: float = 0.3
+) -> float:
+    player: Player = env.objects["player"]
+    opponent: Player = env.objects["opponent"]
+    
+    dx = player.body.position.x - opponent.body.position.x
+    dy = player.body.position.y - opponent.body.position.y
+    distance = (dx*dx + dy*dy)**0.5
+    
+    is_attacking = isinstance(player.state, AttackState)
+    
+    if is_attacking:
+        if distance > optimal_distance + tolerance:
+            return -5.0 * env.dt  # STRONG penalty for far-away attacks
+        elif distance < optimal_distance - tolerance:
+            return -3.0 * env.dt  # Penalty for too-close attacks
+        else:
+            return 2.0 * env.dt   # Good reward for proper distance
+    
+    return 0.0
+
+def facing_direction_reward(
+    env: WarehouseBrawl,
+) -> float:
+    """Reward for facing towards the opponent."""
+    player: Player = env.objects["player"]
+    opponent: Player = env.objects["opponent"]
+    
+    dx = opponent.body.position.x - player.body.position.x
+    
+    # Use the actual facing direction from the Player object
+    # Facing.RIGHT = 1, Facing.LEFT = -1
+    facing_correct = (int(player.facing) * dx) > 0
+    
+    return 1.0 * env.dt if facing_correct else -1.0 * env.dt
+
+def movement_towards_opponent_reward(env: WarehouseBrawl) -> float:
+    """Reward horizontal velocity that reduces horizontal distance to the opponent."""
+    player: Player = env.objects["player"]
+    opponent: Player = env.objects["opponent"]
+
+    dx = opponent.body.position.x - player.body.position.x
+    vx = player.body.velocity.x
+
+    # Normalize by distance to avoid huge values when very close
+    denom = max(abs(dx), 0.5)
+    alignment = (vx * dx) / denom
+
+    # Return alignment scaled by timestep (positive when moving toward opponent)
+    return float(alignment) * env.dt
+
 '''
 Add your dictionary of RewardFunctions here using RewTerms
 '''
 def gen_reward_manager():
     reward_functions = {
-        'target_height_reward': RewTerm(func=base_height_l2, weight=0.0, params={'target_height': -4, 'obj_name': 'player'}),
-        'danger_zone_reward': RewTerm(func=danger_zone_reward, weight=0.5),
-        'damage_interaction_reward': RewTerm(func=damage_interaction_reward, weight=1.0),
-        'head_to_middle_reward': RewTerm(func=head_to_middle_reward, weight=0.1),
-        'head_to_opponent': RewTerm(func=head_to_opponent, weight=0.3),
-        'penalize_attack_reward': RewTerm(func=in_state_reward, weight=-0.04, params={'desired_state': AttackState}),
-        'holding_more_than_3_keys': RewTerm(func=holding_more_than_3_keys, weight=-0.01)
-        #'taunt_reward': RewTerm(func=in_state_reward, weight=0.2, params={'desired_state': TauntState}),
-    }
+    'height_bounds_reward': RewTerm(func=height_bounds_reward, weight=2.0),
+    
+    # Primary reward - keep damage important
+    'damage_interaction_reward': RewTerm(func=damage_interaction_reward, weight=5.0),
+    
+    # BOOST movement rewards significantly
+    'head_to_opponent': RewTerm(func=head_to_opponent, weight=8.0),  # Increased from 1.5
+    'movement_towards_opponent': RewTerm(func=movement_towards_opponent_reward, weight=6.0),  # Increased from 1.0
+    'facing_direction': RewTerm(func=facing_direction_reward, weight=3.0),  # Increased from 0.8
+    
+    # Stronger combat positioning
+    'distance_attack_reward': RewTerm(
+        func=distance_based_attack_penalty,
+        weight=4.0,  # Increased from 2.0
+        params={'optimal_distance': 1.0, 'tolerance': 0.3}
+    ),
+    
+    'holding_more_than_3_keys': RewTerm(func=holding_more_than_3_keys, weight=-0.1)
+}
+
     signal_subscriptions = {
-        'on_win_reward': ('win_signal', RewTerm(func=on_win_reward, weight=50)),
-        'on_knockout_reward': ('knockout_signal', RewTerm(func=on_knockout_reward, weight=8)),
-        'on_combo_reward': ('hit_during_stun', RewTerm(func=on_combo_reward, weight=5)),
-        'on_equip_reward': ('weapon_equip_signal', RewTerm(func=on_equip_reward, weight=10)),
-        'on_drop_reward': ('weapon_drop_signal', RewTerm(func=on_drop_reward, weight=15))
+        'on_win_reward': ('win_signal', RewTerm(func=on_win_reward, weight=100)),
+        'on_knockout_reward': ('knockout_signal', RewTerm(func=on_knockout_reward, weight=30)),
+        'on_combo_reward': ('hit_during_stun', RewTerm(func=on_combo_reward, weight=15)),
+        'on_equip_reward': ('weapon_equip_signal', RewTerm(func=on_equip_reward, weight=5)),
+        'on_drop_reward': ('weapon_drop_signal', RewTerm(func=on_drop_reward, weight=5))
     }
     return RewardManager(reward_functions, signal_subscriptions)
 
@@ -574,14 +676,17 @@ if __name__ == '__main__':
     from user.my_agent import KevinAgent
     # my_agent = Rec
 
+    # Use CustomAgent to choose the SB3 algorithm and feature extractor.
+    # Example: PPO with the provided MLPExtractor (non-recurrent)
     # Start here if you want to train from scratch. e.g:
-    # my_agent = RecurrentPPOAgent()
+    # my_agent = CustomAgent(sb3_class=PPO, extractor=MLPExtractor)
 
-    # Start here if you want to train from a specific timestep. e.g:
-    my_agent = RecurrentPPOAgent(
-    total_timesteps=60000,
-    file_path='checkpoints/experiment_9/rl_model_270000_steps.zip'
-)
+    # Start here if you want to load from a specific timestep/checkpoint. e.g:
+    my_agent = CustomAgent(
+        sb3_class=PPO,
+        extractor=MLPExtractor,
+        file_path="checkpoints/experiment_9/rl_model_400003_steps.zip"
+    )
 
     # Reward manager
     reward_manager = gen_reward_manager()
@@ -603,10 +708,9 @@ if __name__ == '__main__':
 
     # Set opponent settings here:
     opponent_specification = {
-                    'self_play': (8, selfplay_handler),
-                    'constant_agent': (0.5, partial(ConstantAgent)),
-                    'based_agent': (1.5, partial(BasedAgent)),
-                }
+        'constant_agent': (0.7, partial(ConstantAgent)),  # Mostly static opponents
+        'based_agent': (0.3, partial(BasedAgent)),        # Some simple AI
+    }
     opponent_cfg = OpponentsCfg(opponents=opponent_specification)
 
     train(my_agent,

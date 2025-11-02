@@ -16,15 +16,12 @@
 
 import os
 import gdown
-from typing import Optional
+from typing import Optional, Type
 from environment.agent import Agent
 from stable_baselines3 import PPO, A2C # Sample RL Algo imports
+from stable_baselines3.common.base_class import BaseAlgorithm
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from sb3_contrib import RecurrentPPO # Importing an LSTM
-
-# To run the sample TTNN model, you can uncomment the 2 lines below: 
-# import ttnn
-# from user.my_agent_tt import TTMLPPolicy
-
 
 class SubmittedAgent(Agent):
     '''
@@ -36,9 +33,6 @@ class SubmittedAgent(Agent):
     ):
         super().__init__(file_path)
 
-        # To run a TTNN model, you must maintain a pointer to the device and can be done by 
-        # uncommmenting the line below to use the device pointer
-        # self.mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,1))
 
     def _initialize(self) -> None:
         if self.file_path is None:
@@ -47,20 +41,13 @@ class SubmittedAgent(Agent):
         else:
             self.model = PPO.load(self.file_path)
 
-        # To run the sample TTNN model during inference, you can uncomment the 5 lines below:
-        # This assumes that your self.model.policy has the MLPPolicy architecture defined in `train_agent.py` or `my_agent_tt.py`
-        # mlp_state_dict = self.model.policy.features_extractor.model.state_dict()
-        # self.tt_model = TTMLPPolicy(mlp_state_dict, self.mesh_device)
-        # self.model.policy.features_extractor.model = self.tt_model
-        # self.model.policy.vf_features_extractor.model = self.tt_model
-        # self.model.policy.pi_features_extractor.model = self.tt_model
 
     def _gdown(self) -> str:
         data_path = "rl-model.zip"
         if not os.path.isfile(data_path):
             print(f"Downloading {data_path}...")
             # Place a link to your PUBLIC model data here. This is where we will download it from on the tournament server.
-            url = "https://drive.google.com/file/d/1JIokiBOrOClh8piclbMlpEEs6mj3H1HJ/view?usp=sharing"
+            url = "https://drive.google.com/file/d/1DUMTvlZ1diaLW2j0GmRFbihuRphQsAIz/view?usp=sharing"
             gdown.download(url, output=data_path, fuzzy=True)
         return data_path
 
@@ -79,54 +66,52 @@ class SubmittedAgent(Agent):
 # ======================================================
 # My first custom agent
 # ======================================================
+class CustomAgent(Agent): 
 
-from stable_baselines3 import PPO
-
-class KevinAgent(Agent): 
-
-    def __init__(self, file_path: Optional[str] = None):
+    def __init__(self, sb3_class: Optional[Type[BaseAlgorithm]] = PPO, file_path: str = None, extractor: BaseFeaturesExtractor = None):
+        self.sb3_class = sb3_class
+        self.extractor = extractor
         super().__init__(file_path)
-        self.file_path = file_path
-
-    def _initialize(self):
-        if self.file_path is not None:
-            # Load pretrained model
-            print(f"Loading pretrained model from {self.file_path}")
-            self.model = PPO.load(self.file_path)
-        else:
-            # Create a new PPO model from scratch (this is just a sample)
-            print("Creating new PPO agent...")
-            policy_kwargs = dict(net_arch=[256, 256])
-            self.model = PPO(
+    
+    def _initialize(self) -> None:
+        if self.file_path is None:
+            # Improved parameters for fighting game
+            self.model = self.sb3_class(
                 "MlpPolicy",
                 self.env,
-                verbose=1,
-                learning_rate=3e-4,
-                n_steps=2048,
-                batch_size=64,
-                ent_coef=0.01,
-                policy_kwargs=policy_kwargs
+                policy_kwargs=self.extractor.get_policy_kwargs(),
+                verbose=1,  # Set to 1 to see training logs
+                n_steps=1024,          # Reduced for more frequent updates
+                batch_size=256,        # Increased for more stable updates
+                ent_coef=0.01,         # Slightly more exploration
+                learning_rate=1e-4,    # Reduced learning rate
+                n_epochs=10,
+                clip_range=0.2,
+                gae_lambda=0.95,
+                gamma=0.99             # Explicitly set discount factor
             )
-    
+            del self.env
+        else:
+            self.model = self.sb3_class.load(self.file_path)
+
+    def _gdown(self) -> str:
+        # Call gdown to your link
+        return
+
+    #def set_ignore_grad(self) -> None:
+        #self.model.set_ignore_act_grad(True)
+
     def predict(self, obs):
-        """Predict action given observation (used during matches)."""
         action, _ = self.model.predict(obs)
         return action
 
-    def learn(self, env, total_timesteps: int, log_interval: int = 4):
-        """Train the PPO model and save periodic checkpoints."""
-        self.model.set_env(env)
-        for i in range(10):
-            print(f"Training chunk {i+1}/10...")
-            self.model.learn(
-                total_timesteps=total_timesteps // 10,
-                reset_num_timesteps=False,
-                log_interval=log_interval
-            )
-            self.model.save(f"checkpoints/kevin_agent_{(i+1)*total_timesteps//10}.zip")
-        print("Training complete!")
+    def save(self, file_path: str) -> None:
+        self.model.save(file_path, include=['num_timesteps'])
 
-    def save(self, file_path: str):
-        """Save the final trained model."""
-        print(f"Saving model to {file_path}")
-        self.model.save(file_path)
+    def learn(self, env, total_timesteps, log_interval: int = 1, verbose=0):
+        self.model.set_env(env)
+        self.model.verbose = verbose
+        self.model.learn(
+            total_timesteps=total_timesteps,
+            log_interval=log_interval,
+        )
